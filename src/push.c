@@ -161,6 +161,83 @@ int git_push_add_refspec(git_push *push, const char *refspec)
 	return 0;
 }
 
+static int update_push_status_cb(const char *ref, const char *msg, void *payload)
+{
+    git_vector *refs = (git_vector *)payload;
+    
+    if(msg == NULL)
+    {
+        git_vector_insert(refs, git__strdup(ref));
+    }
+    
+    return 0;
+}
+
+int git_push_update_tips(git_push *push)
+{
+    git_odb *odb;
+	struct git_refspec *fetch_spec;
+    git_vector push_status_refs;
+    unsigned int i, j;
+    git_buf refname = GIT_BUF_INIT;
+    char* pushstatusrefname;
+    push_spec *push_spec, *tmppushspec;
+    git_reference *ref;
+    
+    fetch_spec = &push->remote->fetch;
+    
+    if (git_repository_odb__weakptr(&odb, push->remote->repo) < 0)
+		goto on_error;
+    
+    if(git_push_status_foreach(push, update_push_status_cb, &push_status_refs))
+        goto on_error;
+
+    /* Iterate through push refs */
+    for(i = 0; i < push_status_refs.length; i++)
+    {
+        push_spec = NULL;
+        
+        pushstatusrefname = (char*) push_status_refs.contents[i];
+        
+        /* Find the corresponding remote ref */
+        if (git_refspec_src_matches(fetch_spec, pushstatusrefname)) {
+			if (git_refspec_transform_r(&refname, fetch_spec, pushstatusrefname) < 0)
+                goto on_error;
+        } else {
+            continue;
+        }
+        
+        /* Find push ref spec */
+        git_vector_foreach(&push->specs, j, tmppushspec) {
+            if(!strcmp(push_spec->rref, pushstatusrefname)) {
+                push_spec = tmppushspec;
+                continue;          
+            }
+        }
+        
+        if(push_spec == NULL)
+            continue;
+        
+        /* Update remote ref */
+        /* Delete if loid does not exist? */
+        if(!git_oid_iszero(&push_spec->loid))
+           git_reference_create(&ref, push->remote->repo, refname.ptr, &push_spec->loid, true);
+        else {
+            git_reference_lookup(&ref, push->remote->repo, refname.ptr);
+            git_reference_delete(ref);
+        }                     
+    }
+    
+    git_vector_free(&push_status_refs);
+	git_buf_free(&refname);
+    return 0;
+    
+on_error:
+	git_vector_free(&push_status_refs);
+	git_buf_free(&refname);
+	return -1;
+}
+
 static int revwalk(git_vector *commits, git_push *push)
 {
 	git_remote_head *head;
