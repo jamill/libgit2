@@ -174,8 +174,14 @@ void test_network_remote_remotes__fnmatch(void)
 void test_network_remote_remotes__transform(void)
 {
 	char ref[1024] = {0};
+	int expected_reference_length = 25;
 
-	cl_git_pass(git_refspec_transform(ref, sizeof(ref), _refspec, "refs/heads/master"));
+	cl_assert_equal_i(expected_reference_length,
+		git_refspec_transform(NULL, 0, _refspec, "refs/heads/master"));
+
+	cl_assert_equal_i(expected_reference_length,
+		git_refspec_transform(ref, expected_reference_length, _refspec, "refs/heads/master"));
+
 	cl_assert_equal_s(ref, "refs/remotes/test/master");
 }
 

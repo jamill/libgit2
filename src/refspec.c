@@ -174,7 +174,7 @@ static int refspec_transform_internal(char *out, size_t outlen, const char *from
 	baselen = strlen(to);
 	if (outlen <= baselen) {
 		giterr_set(GITERR_INVALID, "Reference name too long");
-		return GIT_EBUFS;
+		return GIT_ERROR;
 	}
 
 	/*
@@ -182,8 +182,9 @@ static int refspec_transform_internal(char *out, size_t outlen, const char *from
 	 * branch, so no actual transformation is needed.
 	 */
 	if (to[baselen - 1] != '*') {
-		memcpy(out, to, baselen + 1); /* include '\0' */
-		return 0;
+		if(out != NULL)
+			memcpy(out, to, baselen + 1); /* include '\0' */
+		return baselen + 1;
 	}
 
 	/* There's a '*' at the end, so remove its length */
@@ -199,15 +200,12 @@ static int refspec_transform_internal(char *out, size_t outlen, const char *from
 		return GIT_EBUFS;
 	}
 
-	memcpy(out, to, baselen);
-	memcpy(out + baselen, name, namelen + 1);
+	if(out != null) {
+		memcpy(out, to, baselen);
+		memcpy(out + baselen, name, namelen + 1);
+	}
 
-	return 0;
-}
-
-int git_refspec_transform(char *out, size_t outlen, const git_refspec *spec, const char *name)
-{
-	return refspec_transform_internal(out, outlen, spec->src, spec->dst, name);
+	return baselen + namelen + 1;
 }
 
 int git_refspec_rtransform(char *out, size_t outlen, const git_refspec *spec, const char *name)
@@ -245,6 +243,37 @@ int git_refspec_transform_l(git_buf *out, const git_refspec *spec, const char *n
 {
 	return refspec_transform(out, spec->dst, spec->src, name);
 }
+
+int git_refspec_transform(char *out, size_t outlen, const git_refspec *spec, const char *name)
+{
+	git_buf buf = GIT_BUF_INIT;
+	int error = 0;
+
+	if(out && outlen)
+		*out = '\0';
+
+	if ((error = refspec_transform(&buf, spec->src, spec->dst, name)) != 0)
+		goto cleanup;
+
+	error = buf.size + 1;
+
+	if (out == NULL || outlen == 0)
+		goto cleanup;
+	else if (buf.size > outlen -1) {
+		giterr_set(
+			GITERR_INVALID,
+			"Buffer too short to hold the transformed reference.");
+		error = GIT_ERROR;
+		goto cleanup;
+	}
+
+	git_buf_copy_cstr(out, outlen, &buf);
+
+cleanup:
+	git_buf_free(&buf);
+	return error;
+}
+
 
 int git_refspec__serialize(git_buf *out, const git_refspec *refspec)
 {
