@@ -173,17 +173,35 @@ void test_network_remote_remotes__fnmatch(void)
 
 void test_network_remote_remotes__transform(void)
 {
-	char ref[1024] = {0};
+	int expected_length = 25;
+	char ref[25] = {0};
 
-	cl_git_pass(git_refspec_transform(ref, sizeof(ref), _refspec, "refs/heads/master"));
+	cl_assert_equal_i(expected_length,
+		git_refspec_transform(NULL, 0, _refspec, "refs/heads/master"));
+
+	cl_assert_equal_i(expected_length,
+		git_refspec_transform(ref, expected_length, _refspec, "refs/heads/master"));
+
 	cl_assert_equal_s(ref, "refs/remotes/test/master");
+}
+
+void test_network_remote_remotes__transform_insufficient_buffer(void)
+{
+	int insufficient_length = 24;
+	char ref[25] = {0};
+
+	cl_git_fail(git_refspec_transform(ref, insufficient_length, _refspec, "refs/heads/master"));
 }
 
 void test_network_remote_remotes__transform_destination_to_source(void)
 {
-	char ref[1024] = {0};
+	int expected_length = 18;
+	char ref[18] = {0};
 
-	cl_git_pass(git_refspec_rtransform(ref, sizeof(ref), _refspec, "refs/remotes/test/master"));
+	cl_assert_equal_i(expected_length, 
+		git_refspec_rtransform(NULL, 0, _refspec, "refs/remotes/test/master"));
+	cl_assert_equal_i(expected_length, 
+		git_refspec_rtransform(ref, expected_length, _refspec, "refs/remotes/test/master"));
 	cl_assert_equal_s(ref, "refs/heads/master");
 }
 

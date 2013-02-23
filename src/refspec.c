@@ -171,19 +171,28 @@ static int refspec_transform_internal(char *out, size_t outlen, const char *from
 {
 	size_t baselen, namelen;
 
+	if(out && outlen)
+		*out = '\0';
+
 	baselen = strlen(to);
-	if (outlen <= baselen) {
-		giterr_set(GITERR_INVALID, "Reference name too long");
-		return GIT_EBUFS;
-	}
 
 	/*
 	 * No '*' at the end means that it's mapped to one specific local
 	 * branch, so no actual transformation is needed.
 	 */
 	if (to[baselen - 1] != '*') {
-		memcpy(out, to, baselen + 1); /* include '\0' */
-		return 0;
+		if (out) {
+			if (outlen <= baselen) {
+				giterr_set(
+					GITERR_INVALID,
+					"Out buffer too short to hold the transformed reference.");
+				return GIT_ERROR;
+			}
+
+			memcpy(out, to, baselen + 1); /* include '\0' */
+		}
+
+		return baselen + 1;
 	}
 
 	/* There's a '*' at the end, so remove its length */
@@ -194,15 +203,19 @@ static int refspec_transform_internal(char *out, size_t outlen, const char *from
 
 	namelen = strlen(name);
 
-	if (outlen <= baselen + namelen) {
-		giterr_set(GITERR_INVALID, "Reference name too long");
-		return GIT_EBUFS;
+	if (out) {
+		if (outlen <= baselen + namelen) {
+			giterr_set(
+				GITERR_INVALID, 
+				"Out buffer too short to hold the transformed reference.");
+			return GIT_ERROR;
+		}
+
+		memcpy(out, to, baselen);
+		memcpy(out + baselen, name, namelen + 1);
 	}
 
-	memcpy(out, to, baselen);
-	memcpy(out + baselen, name, namelen + 1);
-
-	return 0;
+	return baselen + namelen + 1;
 }
 
 int git_refspec_transform(char *out, size_t outlen, const git_refspec *spec, const char *name)
