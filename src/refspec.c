@@ -220,11 +220,25 @@ static int refspec_transform_internal(char *out, size_t outlen, const char *from
 
 int git_refspec_transform(char *out, size_t outlen, const git_refspec *spec, const char *name)
 {
+	if (!git_refspec_src_matches(spec, name)) {
+		giterr_set(
+			GITERR_INVALID, 
+			"Reference does not match refspec source pattern.");
+			return GIT_ERROR;
+	}
+
 	return refspec_transform_internal(out, outlen, spec->src, spec->dst, name);
 }
 
 int git_refspec_rtransform(char *out, size_t outlen, const git_refspec *spec, const char *name)
 {
+	if (!git_refspec_dst_matches(spec, name)) {
+		giterr_set(
+			GITERR_INVALID, 
+			"Reference does not match refspec destination pattern.");
+			return GIT_ERROR;
+	}
+
 	return refspec_transform_internal(out, outlen, spec->dst, spec->src, name);
 }
 

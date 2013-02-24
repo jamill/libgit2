@@ -198,11 +198,25 @@ void test_network_remote_remotes__transform_destination_to_source(void)
 	int expected_length = 18;
 	char ref[18] = {0};
 
-	cl_assert_equal_i(expected_length, 
+	cl_assert_equal_i(expected_length,
 		git_refspec_rtransform(NULL, 0, _refspec, "refs/remotes/test/master"));
-	cl_assert_equal_i(expected_length, 
+	cl_assert_equal_i(expected_length,
 		git_refspec_rtransform(ref, expected_length, _refspec, "refs/remotes/test/master"));
 	cl_assert_equal_s(ref, "refs/heads/master");
+}
+
+void test_network_remote_remotes__transform_invalid_source(void)
+{
+	cl_git_fail_with(
+		git_refspec_transform(NULL, 0, _refspec, "refs/head/master"),
+		GIT_ERROR);
+}
+
+void test_network_remote_remotes__transform_invalid_destination(void)
+{
+	cl_git_fail_with(
+		git_refspec_rtransform(NULL, 0, _refspec, "refs/remote/test/master"),
+		GIT_ERROR);
 }
 
 void test_network_remote_remotes__transform_r(void)
