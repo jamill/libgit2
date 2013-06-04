@@ -345,10 +345,17 @@ int git_futils_mkdir(
 
 				already_exists = 1;
 				break;
+#ifdef GIT_WIN32
+			case EACCES:
+#endif
 			case ENOSYS:
-				/* Solaris can generate this error if you try to mkdir
-				 * a path which is already a mount point. In that case,
-				 * the path does already exist; but it's not implied by
+
+				/* The following errors can be generated if:
+				 * EACCESS - Win32 can generate this error if you try to mkdir
+				 *           a path which is the root of a volume.
+				/* ENOSYS  - Solaris can generate a ENOSYS error if you try to mkdir
+				 *           a path which is already a mount point.
+				 * In these cases, the path does already exist; but it's not implied by
 				 * the definition of the error, so let's recheck */
 				if (git_path_isdir(make_path.ptr)) {
 					already_exists = 1;
