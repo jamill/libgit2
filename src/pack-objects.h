@@ -83,6 +83,9 @@ struct git_packbuilder {
 	git_packbuilder_progress progress_cb;
 	void *progress_cb_payload;
 	double last_progress_report_time; /* the time progress was last reported */
+	int cancelled; /* Has the current pack building operation been cancelled */
+	int reporting_progress; /* Is someone working on reporting progress. */
+	unsigned int nr_deltafied; /* number of deltafied objects. */
 
 	bool done;
 };

@@ -866,7 +866,10 @@ static int find_deltas(git_packbuilder *pb, git_pobject **list,
 	uint32_t idx = 0, count = 0;
 	unsigned long mem_usage = 0;
 	unsigned int i;
-	int error = -1;
+	unsigned int local_processed_count = 0; /* The number of items processed locally */
+	unsigned int local_total_processed_count = 0; /* The local view of the total number of objects processed (by all threads). */
+	int error = 0;
+	int report_progress = 0; /* Flag to indicate if this thread should report progress. */
 
 	array = git__calloc(window, sizeof(struct unpacked));
 	GITERR_CHECK_ALLOC(array);
@@ -877,14 +880,77 @@ static int find_deltas(git_packbuilder *pb, git_pobject **list,
 		int j, best_base = -1;
 
 		git_packbuilder__progress_lock(pb);
+
+		/*
+		 * The first time through the loop, we will not have processed anything yet.
+		 */
+		if (local_processed_count > 0)
+			pb->nr_deltafied++;
+
+		/* 
+		 * Update the local variable holding of the total number of processed
+		 * objects (by all threads).
+		 */
+		local_total_processed_count = pb->nr_deltafied;
+
+		/* 
+		 * If we reported progress last iteration, clear the flag that someone
+		 * is handling the progress report.
+		 */
+		if (report_progress) {
+			report_progress = 0;
+			pb->reporting_progress = 0;
+		}
+
 		if (!*list_size) {
 			git_packbuilder__progress_unlock(pb);
 			break;
 		}
 
+		/*
+		 * Check if the pack building has been cancelled.
+		 */
+		if (pb->cancelled == 1) {
+			error = GIT_EUSER;
+			git_packbuilder__progress_unlock(pb);
+			goto on_error;
+		}
+
 		po = *list++;
 		(*list_size)--;
+
+		/* Determine if this thread should report progress. */
+		if (pb->progress_cb && (pb->reporting_progress != 1)) {
+
+			double current_time = git__timer();
+			if ((current_time - (pb->last_progress_report_time)) >= MIN_PROGRESS_UPDATE_INTERVAL) {
+				report_progress = 1;
+				pb->reporting_progress = 1;
+				pb->last_progress_report_time = current_time;
+			}
+		}
+
 		git_packbuilder__progress_unlock(pb);
+
+		/* report progress if necessary. */
+		if (report_progress) {
+			if (pb->progress_cb(GIT_PACKBUILDER_DELTAFICATION, local_total_processed_count, pb->nr_objects, pb->progress_cb_payload)) {
+
+				/* REVIEW: 
+				 * 1) We have already taken an object from the list, do we need to process it if cancelled? (e.g. if we want to resume building this pack?)
+				 * 2) Do we need to set the cancelled flag under lock? 
+				 *   (e.g. if the only side effect is a thread might not observe the cancel immedietly and does more work...)
+				 * 3) Maybe we finish loop and just cancel from inside of the progress lock...
+				 */
+				git_packbuilder__progress_lock(pb);
+				pb->cancelled = 1;
+				giterr_clear();
+				error = GIT_EUSER;
+				git_packbuilder__progress_unlock(pb);
+
+				goto on_error;
+			}
+		}
 
 		mem_usage -= free_unpacked(n);
 		n->object = po;
@@ -922,7 +988,7 @@ static int find_deltas(git_packbuilder *pb, git_pobject **list,
 			if (!m->object)
 				break;
 
-			if (try_delta(pb, n, m, max_depth, &mem_usage, &ret) < 0)
+			if ((error = try_delta(pb, n, m, max_depth, &mem_usage, &ret)) < 0)
 				goto on_error;
 			if (ret < 0)
 				break;
@@ -945,7 +1011,7 @@ static int find_deltas(git_packbuilder *pb, git_pobject **list,
 		 * between writes at that moment.
 		 */
 		if (po->delta_data) {
-			if (git__compress(&zbuf, po->delta_data, po->delta_size) < 0)
+			if ((error = git__compress(&zbuf, po->delta_data, po->delta_size)) < 0)
 				goto on_error;
 
 			git__free(po->delta_data);
@@ -993,8 +1059,9 @@ static int find_deltas(git_packbuilder *pb, git_pobject **list,
 			count++;
 		if (idx >= window)
 			idx = 0;
+
+		local_processed_count++;
 	}
-	error = 0;
 
 on_error:
 	for (i = 0; i < window; ++i) {
@@ -1031,7 +1098,16 @@ static void *threaded_find_deltas(void *arg)
 {
 	struct thread_params *me = arg;
 
-	while (me->remaining) {
+	/* loop while there is remaining work and we are not cancelled */
+	/* REVIEW: 
+	 * 1) Do we really want to loop here on remaining?
+	 *    Other calls to find_deltas do not loop on remaining > 0...
+	 * 2) If so, is it safe to read the cancelled flag outside of progress lock?
+	 * 3) How can we propagate errors back to main thread... If this is threaded,
+	 *    then will giterr_set be setting the error where it will never be read?
+	 *    (if it has thread affinity?)
+	 */
+	while ((me->remaining > 0) && (me->pb->cancelled != 1)) {
 		if (find_deltas(me->pb, me->list, &me->remaining,
 				me->window, me->depth) < 0) {
 			; /* TODO */
@@ -1076,8 +1152,7 @@ static int ll_find_deltas(git_packbuilder *pb, git_pobject **list,
 		pb->nr_threads = git_online_cpus();
 
 	if (pb->nr_threads <= 1) {
-		find_deltas(pb, list, &list_size, window, depth);
-		return 0;
+		return find_deltas(pb, list, &list_size, window, depth);
 	}
 
 	p = git__malloc(pb->nr_threads * sizeof(*p));
@@ -1155,13 +1230,17 @@ static int ll_find_deltas(git_packbuilder *pb, git_pobject **list,
 			git_cond_wait(&pb->progress_cond, &pb->progress_mutex);
 		}
 
-		/* At this point we hold the progress lock and have located
+		/* 
+		 * At this point we hold the progress lock and have located
 		 * a thread to receive more work. We still need to locate a
-		 * thread from which to steal work (the victim). */
-		for (i = 0; i < pb->nr_threads; i++)
-			if (p[i].remaining > 2*window &&
-			    (!victim || victim->remaining < p[i].remaining))
+		 * thread from which to steal work (the victim).
+		 */
+		if (!pb->cancelled) {
+			for (i = 0; i < pb->nr_threads; i++)
+			if (p[i].remaining > 2 * window &&
+				(!victim || victim->remaining < p[i].remaining))
 				victim = &p[i];
+		}
 
 		if (victim) {
 			sub_size = victim->remaining / 2;
@@ -1208,8 +1287,14 @@ static int ll_find_deltas(git_packbuilder *pb, git_pobject **list,
 		}
 	}
 
+	if (pb->cancelled) {
+		/* We are cancelled */
+		giterr_clear();
+		ret = GIT_EUSER;
+	}
+
 	git__free(p);
-	return 0;
+	return ret;
 }
 
 #else
@@ -1220,6 +1305,7 @@ static int prepare_pack(git_packbuilder *pb)
 {
 	git_pobject **delta_list;
 	unsigned int i, n = 0;
+	int error = 0;
 
 	if (pb->nr_objects == 0 || pb->done)
 		return 0; /* nothing to do */
@@ -1228,8 +1314,12 @@ static int prepare_pack(git_packbuilder *pb)
 	 * Although we do not report progress during deltafication, we
 	 * at least report that we are in the deltafication stage
 	 */
-	if (pb->progress_cb)
-			pb->progress_cb(GIT_PACKBUILDER_DELTAFICATION, 0, pb->nr_objects, pb->progress_cb_payload);
+	if (pb->progress_cb) {
+		if ((error = pb->progress_cb(GIT_PACKBUILDER_DELTAFICATION, 0, pb->nr_objects, pb->progress_cb_payload)) < 0) {
+			giterr_clear();
+			return error;
+		}
+	}
 
 	delta_list = git__malloc(pb->nr_objects * sizeof(*delta_list));
 	GITERR_CHECK_ALLOC(delta_list);
@@ -1246,31 +1336,50 @@ static int prepare_pack(git_packbuilder *pb)
 
 	if (n > 1) {
 		git__tsort((void **)delta_list, n, type_size_sort);
-		if (ll_find_deltas(pb, delta_list, n,
+		if ((error = ll_find_deltas(pb, delta_list, n,
 				   GIT_PACK_WINDOW + 1,
-				   GIT_PACK_DEPTH) < 0) {
-			git__free(delta_list);
-			return -1;
+				   GIT_PACK_DEPTH)) < 0) {
+			goto cleanup;
+		}
+	}
+
+	/* Final progress report. */
+	if (pb->progress_cb) {
+		if ((error = pb->progress_cb(GIT_PACKBUILDER_DELTAFICATION, pb->nr_objects, pb->nr_objects, pb->progress_cb_payload)) < 0) {
+			giterr_clear();
+			return error;
 		}
 	}
 
 	pb->done = true;
-	git__free(delta_list);
-	return 0;
-}
 
-#define PREPARE_PACK if (prepare_pack(pb) < 0) { return -1; }
+cleanup:
+	git__free(delta_list);
+	return error;
+}
 
 int git_packbuilder_foreach(git_packbuilder *pb, int (*cb)(void *buf, size_t size, void *payload), void *payload)
 {
-	PREPARE_PACK;
-	return write_pack(pb, cb, payload);
+	int error = 0;
+
+	if ((error = prepare_pack(pb)) < 0)
+		return error;
+
+	error = write_pack(pb, cb, payload);
+
+	return error;
 }
 
 int git_packbuilder_write_buf(git_buf *buf, git_packbuilder *pb)
 {
-	PREPARE_PACK;
-	return write_pack(pb, &write_pack_buf, buf);
+	int error = 0;
+
+	if ((error = prepare_pack(pb)) < 0)
+		return error;
+
+	error = write_pack(pb, &write_pack_buf, buf);
+
+	return error;
 }
 
 static int write_cb(void *buf, size_t len, void *payload)
@@ -1288,27 +1397,27 @@ int git_packbuilder_write(
 	git_indexer_stream *indexer;
 	git_transfer_progress stats;
 	struct pack_write_context ctx;
+	int error = 0;
 
-	PREPARE_PACK;
+	if ((error = prepare_pack(pb)) < 0)
+		return error;
 
-	if (git_indexer_stream_new(
-		&indexer, path, progress_cb, progress_cb_payload) < 0)
-		return -1;
+	if ((error = git_indexer_stream_new(
+		&indexer, path, progress_cb, progress_cb_payload)) < 0)
+		return error;
 
 	ctx.indexer = indexer;
 	ctx.stats = &stats;
 
-	if (git_packbuilder_foreach(pb, write_cb, &ctx) < 0 ||
-		git_indexer_stream_finalize(indexer, &stats) < 0) {
+	if ((error = git_packbuilder_foreach(pb, write_cb, &ctx) < 0) ||
+		(error = git_indexer_stream_finalize(indexer, &stats) < 0)) {
 		git_indexer_stream_free(indexer);
-		return -1;
+		return error;
 	}
 
 	git_indexer_stream_free(indexer);
-	return 0;
+	return error;
 }
-
-#undef PREPARE_PACK
 
 static int cb_tree_walk(const char *root, const git_tree_entry *entry, void *payload)
 {
