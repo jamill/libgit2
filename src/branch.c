@@ -452,6 +452,78 @@ cleanup:
 	return error;
 }
 
+int git_branch_remote_ref(git_buf *buf, git_repository *repo, const char *refname)
+{
+	git_strarray remote_list = { 0 };
+	size_t i;
+	git_remote *remote;
+	git_refspec *fetchspec = NULL;
+	int error = 0;
+	char *remote_name = NULL;
+
+	assert(buf && repo && refname);
+
+	git_buf_sanitize(buf);
+
+	/* Verify that this is a remote branch */
+	if (!git_reference__is_remote(refname)) {
+		giterr_set(GITERR_INVALID, "Reference '%s' is not a remote branch.",
+			refname);
+		error = GIT_ERROR;
+		goto cleanup;
+	}
+
+	/* Get the remotes */
+	if ((error = git_remote_list(&remote_list, repo)) < 0)
+		goto cleanup;
+
+	/* Find matching remotes */
+	for (i = 0; i < remote_list.count; i++) {
+		if ((error = git_remote_load(&remote, repo, remote_list.strings[i])) < 0)
+			continue;
+
+		if ((error = git_remote__matching_single_dst_refspec(fetchspec, remote, refname)) < 0)
+			goto cleanup;
+
+		if (fetchspec) {
+			/* If we have not already set out yet, then set
+			* it to the matching remote name. Otherwise
+			* multiple remotes match this reference, and it
+			* is ambiguous. */
+			if (!remote_name) {
+				remote_name = remote_list.strings[i];
+			}
+			else {
+				git_remote_free(remote);
+
+				giterr_set(GITERR_REFERENCE,
+					"Reference '%s' is ambiguous", refname);
+				error = GIT_EAMBIGUOUS;
+				goto cleanup;
+			}
+		}
+
+		git_remote_free(remote);
+	}
+
+	if (remote_name) {
+		git_buf_clear(buf);
+		error = git_buf_puts(buf, remote_name);
+	}
+	else {
+		giterr_set(GITERR_REFERENCE,
+			"Could not determine remote for '%s'", refname);
+		error = GIT_ENOTFOUND;
+	}
+
+cleanup:
+	if (error < 0)
+		git_buf_free(buf);
+
+	git_strarray_free(&remote_list);
+	return error;
+}
+
 int git_branch_upstream(
 	git_reference **tracking_out,
 	const git_reference *branch)

@@ -71,3 +71,79 @@ void test_refs_branches_remote__ambiguous_remote_returns_error(void)
 	cl_git_fail_with(git_branch_remote_name(&buf, g_repo, remote_tracking_branch_name), GIT_EAMBIGUOUS);
 	cl_assert(giterr_last() != NULL);
 }
+
+
+void test_refs_branches_remote__can_get_remoteref_for_branch(void)
+{
+	git_buf remote_ref_name = { 0 };
+
+	cl_git_pass(git_branch_remote_ref(&remote_ref_name, g_repo, remote_tracking_branch_name));
+
+	cl_assert_equal_s("refs/heads/master", remote_ref_name.ptr);
+	git_buf_free(&remote_ref_name);
+}
+
+void test_refs_branches_remote__no_matching_remoteref_returns_error(void)
+{
+	const char *unknown = "refs/remotes/nonexistent/master";
+	git_buf buf;
+
+	giterr_clear();
+	memset(&buf, 0, sizeof(git_buf));
+	cl_git_fail_with(git_branch_remote_ref(&buf, g_repo, unknown), GIT_ENOTFOUND);
+	cl_assert(giterr_last() != NULL);
+}
+
+void test_refs_branches_remote__local_branch_returns_error(void)
+{
+	const char *local = "refs/heads/master";
+	git_buf buf;
+
+	giterr_clear();
+	memset(&buf, 0, sizeof(git_buf));
+	cl_git_fail_with(git_branch_remote_ref(&buf, g_repo, local), GIT_ERROR);
+	cl_assert(giterr_last() != NULL);
+}
+
+void test_refs_branches_remote__ambiguous_remoteref_returns_error(void)
+{
+	git_remote *remote;
+	git_buf buf;
+
+	/* Create the remote */
+	cl_git_pass(git_remote_create(&remote, g_repo, "addtest", "http://github.com/libgit2/libgit2"));
+
+	/* Update the remote fetch spec */
+	git_remote_clear_refspecs(remote);
+	cl_git_pass(git_remote_add_fetch(remote, "refs/heads/*:refs/remotes/test/*"));
+	cl_git_pass(git_remote_save(remote));
+
+	git_remote_free(remote);
+
+	giterr_clear();
+	memset(&buf, 0, sizeof(git_buf));
+	cl_git_fail_with(git_branch_remote_ref(&buf, g_repo, remote_tracking_branch_name), GIT_EAMBIGUOUS);
+	cl_assert(giterr_last() != NULL);
+}
+
+void test_refs_branches_remote__ambiguous_remoterefmapping_returns_error(void)
+{
+	git_remote *remote;
+	git_buf buf;
+
+	/* Create the remote */
+	cl_git_pass(git_remote_load(&remote, g_repo, "test"));
+
+	/* Update the remote fetch spec */
+	git_remote_clear_refspecs(remote);
+	cl_git_pass(git_remote_add_fetch(remote, "refs/heads/*:refs/remotes/test/*"));
+	cl_git_pass(git_remote_add_fetch(remote, "refs/test/*:refs/remotes/test/*"));
+	cl_git_pass(git_remote_save(remote));
+
+	git_remote_free(remote);
+
+	giterr_clear();
+	memset(&buf, 0, sizeof(git_buf));
+	cl_git_fail_with(git_branch_remote_ref(&buf, g_repo, remote_tracking_branch_name), GIT_EAMBIGUOUS);
+	cl_assert(giterr_last() != NULL);
+}

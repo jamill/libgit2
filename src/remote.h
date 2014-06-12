@@ -37,5 +37,6 @@ int git_remote__get_http_proxy(git_remote *remote, bool use_ssl, char **proxy_ur
 
 git_refspec *git_remote__matching_refspec(git_remote *remote, const char *refname);
 git_refspec *git_remote__matching_dst_refspec(git_remote *remote, const char *refname);
+int git_remote__matching_single_dst_refspec(git_refspec *matching_spec, git_remote *remote, const char *refname);
 
 #endif

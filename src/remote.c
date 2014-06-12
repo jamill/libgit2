@@ -1608,6 +1608,31 @@ git_refspec *git_remote__matching_dst_refspec(git_remote *remote, const char *re
 	return NULL;
 }
 
+int git_remote__matching_single_dst_refspec(git_refspec *matching_spec, git_remote *remote, const char *refname)
+{
+	git_refspec *spec;
+	size_t i;
+	matching_spec = NULL;
+
+	git_vector_foreach(&remote->active_refspecs, i, spec) {
+		if (spec->push)
+			continue;
+
+		if (git_refspec_dst_matches(spec, refname)) {
+
+			if (!matching_spec) {
+				matching_spec = spec;
+			} else {
+				giterr_set(GITERR_REFERENCE,
+					"Reference '%s' matches multiple refspecs", refname);
+				return GIT_EAMBIGUOUS;
+			}
+		}
+	}
+
+	return 0;
+}
+
 void git_remote_clear_refspecs(git_remote *remote)
 {
 	git_refspec *spec;

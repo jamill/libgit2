@@ -260,6 +260,25 @@ GIT_EXTERN(int) git_branch_remote_name(
 	git_repository *repo,
 	const char *canonical_branch_name);
 
+/**
+* Return the name of reference on the remote that the remote tracking branch tracks.
+*
+* @param out Pointer to the user-allocated git_buf which will be filled iwth the name of the remote.
+*
+* @param repo The repository where the branch lives.
+*
+* @param canonical_branch_name name of the remote tracking branch.
+*
+* @return 0, GIT_ENOTFOUND
+*     when no remote matching remote was found,
+*     GIT_EAMBIGUOUS when the branch maps to several remotes,
+*     otherwise an error code.
+*/
+GIT_EXTERN(int) git_branch_remote_ref(
+	git_buf *out,
+	git_repository *repo,
+	const char *canonical_branch_name);
+
 /** @} */
 GIT_END_DECL
 #endif
