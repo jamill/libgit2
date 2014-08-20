@@ -306,6 +306,56 @@ void git_submodule_cache_free(git_repository *repo)
 		submodule_cache_free(cache);
 }
 
+static int submodule_repo_init(
+	git_repository **out,
+	git_repository *parent_repo,
+	const char *path,
+	const char *url,
+	bool use_gitlink)
+{
+	int error = 0;
+	git_buf workdir = GIT_BUF_INIT, repodir = GIT_BUF_INIT;
+	git_repository_init_options initopt = GIT_REPOSITORY_INIT_OPTIONS_INIT;
+	git_repository *subrepo = NULL;
+
+	error = git_buf_joinpath(&workdir, git_repository_workdir(parent_repo), path);
+	if (error < 0)
+		goto cleanup;
+
+	initopt.flags = GIT_REPOSITORY_INIT_MKPATH | GIT_REPOSITORY_INIT_NO_REINIT;
+	initopt.origin_url = url;
+
+	/* init submodule repository and add origin remote as needed */
+
+	/* New style: sub-repo goes in <repo-dir>/modules/<name>/ with a
+	 * gitlink in the sub-repo workdir directory to that repository
+	 *
+	 * Old style: sub-repo goes directly into repo/<name>/.git/
+	 */
+	 if (use_gitlink) {
+		error = git_buf_join3(
+			&repodir, '/', git_repository_path(parent_repo), "modules", path);
+		if (error < 0)
+			goto cleanup;
+
+		initopt.workdir_path = workdir.ptr;
+		initopt.flags |=
+			GIT_REPOSITORY_INIT_NO_DOTGIT_DIR |
+			GIT_REPOSITORY_INIT_RELATIVE_GITLINK;
+
+		error = git_repository_init_ext(&subrepo, repodir.ptr, &initopt);
+	} else
+		error = git_repository_init_ext(&subrepo, workdir.ptr, &initopt);
+
+cleanup:
+	git_buf_free(&workdir);
+	git_buf_free(&repodir);
+
+	*out = subrepo;
+
+	return error;
+}
+
 int git_submodule_add_setup(
 	git_submodule **out,
 	git_repository *repo,
@@ -317,7 +367,6 @@ int git_submodule_add_setup(
 	git_config_backend *mods = NULL;
 	git_submodule *sm = NULL;
 	git_buf name = GIT_BUF_INIT, real_url = GIT_BUF_INIT;
-	git_repository_init_options initopt = GIT_REPOSITORY_INIT_OPTIONS_INIT;
 	git_repository *subrepo = NULL;
 
 	assert(repo && url && path);
@@ -337,7 +386,6 @@ int git_submodule_add_setup(
 		goto cleanup;
 
 	/* validate and normalize path */
-
 	if (git__prefixcmp(path, git_repository_workdir(repo)) == 0)
 		path += strlen(git_repository_workdir(repo));
 
@@ -371,44 +419,16 @@ int git_submodule_add_setup(
 	if (error < 0)
 		goto cleanup;
 
-	/* New style: sub-repo goes in <repo-dir>/modules/<name>/ with a
-	 * gitlink in the sub-repo workdir directory to that repository
-	 *
-	 * Old style: sub-repo goes directly into repo/<name>/.git/
+	/* if the repo does not already exist, then init a new repo and add it.
+	 * Otherwise, just add the existing repo.
 	 */
-
-	initopt.flags = GIT_REPOSITORY_INIT_MKPATH |
-		GIT_REPOSITORY_INIT_NO_REINIT;
-	initopt.origin_url = real_url.ptr;
-
-	if (git_path_exists(name.ptr) &&
-		git_path_contains(&name, DOT_GIT))
-	{
-		/* repo appears to already exist - reinit? */
-	}
-	else if (use_gitlink) {
-		git_buf repodir = GIT_BUF_INIT;
-
-		error = git_buf_join3(
-			&repodir, '/', git_repository_path(repo), "modules", path);
-		if (error < 0)
+	if (!(git_path_exists(name.ptr) &&
+		git_path_contains(&name, DOT_GIT))) {
+		if ((error = submodule_repo_init(&subrepo, repo, path, real_url.ptr, use_gitlink)) < 0)
 			goto cleanup;
-
-		initopt.workdir_path = name.ptr;
-		initopt.flags |= GIT_REPOSITORY_INIT_NO_DOTGIT_DIR;
-
-		error = git_repository_init_ext(&subrepo, repodir.ptr, &initopt);
-
-		git_buf_free(&repodir);
 	}
-	else {
-		error = git_repository_init_ext(&subrepo, name.ptr, &initopt);
-	}
-	if (error < 0)
-		goto cleanup;
 
 	/* add submodule to hash and "reload" it */
-
 	if (git_mutex_lock(&repo->_submodules->lock) < 0) {
 		giterr_set(GITERR_OS, "Unable to acquire lock on submodule cache");
 		error = -1;
@@ -426,6 +446,7 @@ cleanup:
 		git_submodule_free(sm);
 		sm = NULL;
 	}
+
 	if (out != NULL)
 		*out = sm;
 
@@ -433,6 +454,23 @@ cleanup:
 	git_repository_free(subrepo);
 	git_buf_free(&real_url);
 	git_buf_free(&name);
+
+	return error;
+}
+
+int git_submodule_repo_init(
+	git_repository **out,
+	const git_submodule *sm,
+	int use_gitlink)
+{
+	int error;
+	git_repository *sub_repo = NULL;
+
+	assert(out && sm);
+
+	error = submodule_repo_init(&sub_repo, sm->repo, sm->path, sm->url, use_gitlink);
+
+	*out = sub_repo;
 
 	return error;
 }
