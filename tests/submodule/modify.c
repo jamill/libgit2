@@ -61,6 +61,41 @@ void test_submodule_modify__init(void)
 	git_config_free(cfg);
 }
 
+void test_submodule_modify__init_relative_url(void)
+{
+	git_config *cfg;
+	const char *str;
+	git_submodule *sm;
+
+	/* erase submodule data from .git/config */
+	cl_git_pass(git_repository_config(&cfg, g_repo));
+	cl_git_pass(
+		git_config_foreach_match(cfg, "submodule\\..*", delete_one_config, cfg));
+	git_config_free(cfg);
+
+	/* confirm no submodule data in config */
+	cl_git_pass(git_repository_config(&cfg, g_repo));
+	cl_git_fail(git_config_get_string(&str, cfg, "submodule.sm_unchanged.url"));
+	cl_git_fail(git_config_get_string(&str, cfg, "submodule.sm_changed_head.url"));
+	cl_git_fail(git_config_get_string(&str, cfg, "submodule.sm_added_and_uncommited.url"));
+	git_config_free(cfg);
+
+	/* update .gitmodules to have a relative url */
+	cl_git_pass(git_submodule_lookup(&sm, g_repo, "sm_unchanged"));
+	cl_git_pass(git_submodule_set_url(sm, "../submod2_target"));
+	cl_git_pass(git_submodule_free(&sm));
+
+	cl_git_pass(git_submodule_init(sm, false));
+
+	/* confirm submodule data in config */
+	cl_git_pass(git_repository_config(&cfg, g_repo));
+	cl_git_pass(git_config_get_string(&str, cfg, "submodule.sm_unchanged.url"));
+	cl_assert(git__suffixcmp(str, "/submod2_target") == 0);
+
+	git_submodule_free(sm);
+	git_config_free(cfg);
+}
+
 static int sync_one_submodule(
 	git_submodule *sm, const char *name, void *payload)
 {
