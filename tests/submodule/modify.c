@@ -66,6 +66,7 @@ void test_submodule_modify__init_relative_url(void)
 	git_config *cfg;
 	const char *str;
 	git_submodule *sm;
+	git_buf path = GIT_BUF_INIT;
 
 	/* erase submodule data from .git/config */
 	cl_git_pass(git_repository_config(&cfg, g_repo));
@@ -83,14 +84,20 @@ void test_submodule_modify__init_relative_url(void)
 	/* update .gitmodules to have a relative url */
 	cl_git_pass(git_submodule_lookup(&sm, g_repo, "sm_unchanged"));
 	cl_git_pass(git_submodule_set_url(sm, "../submod2_target"));
-	cl_git_pass(git_submodule_free(&sm));
+	git_submodule_free(sm);
 
 	cl_git_pass(git_submodule_init(sm, false));
 
 	/* confirm submodule data in config */
 	cl_git_pass(git_repository_config(&cfg, g_repo));
 	cl_git_pass(git_config_get_string(&str, cfg, "submodule.sm_unchanged.url"));
-	cl_assert(git__suffixcmp(str, "/submod2_target") == 0);
+
+	/* construct expected path */
+	git_buf_joinpath(&path, git_repository_workdir(g_repo), "../submod2_target");
+	git_path_prettify(&path, path.ptr, NULL);
+
+	cl_assert_equal_s(path, str);
+	// cl_assert(git__suffixcmp(str, "/submod2_target") == 0);
 
 	git_submodule_free(sm);
 	git_config_free(cfg);

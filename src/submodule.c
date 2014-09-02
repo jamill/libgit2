@@ -826,7 +826,7 @@ int git_submodule_init(git_submodule *sm, int overwrite)
 {
 	int error;
 	const char *val;
-	git_buf key = GIT_BUF_INIT;
+	git_buf key = GIT_BUF_INIT, real_url = GIT_BUF_INIT;
 	git_config *cfg = NULL;
 
 	if (!sm->url) {
@@ -839,10 +839,12 @@ int git_submodule_init(git_submodule *sm, int overwrite)
 		return error;
 
 	/* write "submodule.NAME.url" */
-
+	if ((error = git_submodule_resolve_url(&real_url, sm->repo, sm->url)) < 0)
+		goto cleanup;
+	
 	if ((error = git_buf_printf(&key, "submodule.%s.url", sm->name)) < 0 ||
 		(error = git_config__update_entry(
-			cfg, key.ptr, sm->url, overwrite != 0, false)) < 0)
+			cfg, key.ptr, real_url.ptr, overwrite != 0, false)) < 0)
 		goto cleanup;
 
 	/* write "submodule.NAME.update" if not default */
@@ -860,6 +862,7 @@ int git_submodule_init(git_submodule *sm, int overwrite)
 cleanup:
 	git_config_free(cfg);
 	git_buf_free(&key);
+	git_buf_free(&real_url);
 
 	return error;
 }
